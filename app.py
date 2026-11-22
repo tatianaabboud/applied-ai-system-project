@@ -2,6 +2,7 @@ from datetime import date, datetime, time
 
 import streamlit as st
 
+import ai_suggester
 from pawpal_system import Owner, Pet, Priority, Task, Scheduler
 
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
@@ -61,11 +62,15 @@ with col_b:
         )
     )
 
-col_p1, col_p2 = st.columns(2)
+col_p1, col_p2, col_p3, col_p4 = st.columns([3, 2, 2, 3])
 with col_p1:
     pet_name = st.text_input("Pet name", value="Mochi")
 with col_p2:
     species = st.selectbox("Species", ["dog", "cat", "other"])
+with col_p3:
+    pet_age = int(st.number_input("Age (years)", min_value=0, max_value=40, value=3))
+with col_p4:
+    pet_breed = st.text_input("Breed (optional)", value="")
 
 if st.button("Add pet"):
     if not pet_name.strip():
@@ -73,12 +78,14 @@ if st.button("Add pet"):
     elif any(p.name == pet_name.strip() for p in owner.pets):
         st.warning(f"{pet_name} is already on your list.")
     else:
-        owner.add_pet(Pet(name=pet_name.strip(), species=species))
+        owner.add_pet(Pet(name=pet_name.strip(), species=species, age=pet_age,
+                          breed=pet_breed.strip()))
         st.success(f"Added {pet_name}.")
 
 if owner.pets:
     st.write("Your pets:")
-    st.table([{"name": p.name, "species": p.species, "tasks": len(p.tasks)} for p in owner.pets])
+    st.table([{"name": p.name, "species": p.species, "age": p.age, "breed": p.breed,
+               "tasks": len(p.tasks)} for p in owner.pets])
 else:
     st.info("No pets yet. Add one above.")
 
@@ -148,6 +155,63 @@ if owner.pets:
 else:
     st.caption("Add a pet first to start adding tasks.")
 
+# --- AI suggestions (RAG): guidelines are retrieved for the pet, the LLM turns
+# them into tasks, and the owner reviews them before anything is added. ---
+if owner.pets:
+    st.markdown("### AI task suggestions")
+    st.caption(
+        "Looks up pet-care guidelines for the pet's species, age and breed, and suggests "
+        "tasks based on them. You review each one before it is added."
+    )
+    ai_pet_name = st.selectbox("Suggest tasks for", [p.name for p in owner.pets], key="ai_pet")
+    if st.button("Suggest tasks"):
+        ai_suggester.configure_logging()
+        for key in [k for k in st.session_state if k.startswith(("ai_dur_", "ai_keep_"))]:
+            del st.session_state[key]  # fresh suggestions start with fresh widget state
+        ai_pet =next(p for p in owner.pets if p.name == ai_pet_name)
+        with st.spinner("Reading guidelines and drafting suggestions..."):
+            st.session_state.ai_result = (ai_pet_name, ai_suggester.suggest_tasks(ai_pet))
+
+    if "ai_result" in st.session_state:
+        result_pet_name, result = st.session_state.ai_result
+        result_pet = next((p for p in owner.pets if p.name == result_pet_name), None)
+        if result_pet is None:
+            st.session_state.pop("ai_result")
+        elif result.error:
+            st.warning(f"{result.error} You can still add tasks by hand.")
+        elif not result.suggestions:
+            st.info(f"No new tasks to suggest for {result_pet_name}.")
+        else:
+            st.write(f"Suggestions for {result_pet_name} (uncheck any you don't want):")
+            picks = []
+            for n, s in enumerate(result.suggestions):
+                c_keep, c_dur = st.columns([5, 1])
+                with c_dur:
+                    minutes = int(st.number_input(
+                        "min", 1, 240, s.duration_minutes, key=f"ai_dur_{n}",
+                        label_visibility="collapsed",
+                    ))
+                with c_keep:
+                    time_label = f" at {s.preferred_time:%H:%M}" if s.preferred_time else ""
+                    keep = st.checkbox(
+                        f"**{s.title}**{time_label}, {s.priority.name.lower()} priority, "
+                        f"{s.frequency}",
+                        value=True, key=f"ai_keep_{n}",
+                    )
+                    st.caption(f"{s.rationale} Source: {s.source}")
+                if keep:
+                    picks.append((s, minutes))
+            with st.expander("Guidelines the AI was shown"):
+                for p in result.passages:
+                    st.markdown(f"**{p.source}**: {p.text}")
+            if st.button(f"Add {len(picks)} selected task(s)", disabled=not picks):
+                for s, minutes in picks:
+                    s.duration_minutes = minutes
+                    result_pet.add_task(s.to_task())
+                st.session_state.flash = f"Added {len(picks)} suggested task(s) for {result_pet_name}."
+                st.session_state.pop("ai_result")
+                st.rerun()
+
 scheduler = Scheduler(owner)
 today = date.today()
 
@@ -191,6 +255,7 @@ if owner.get_all_tasks():
                     "overdue": "yes" if t.is_overdue(today) else "",
                     "due": f"{t.start_date:%b %d}",
                     "done": f"{t.last_completed:%b %d}" if t.last_completed else "no",
+                    "notes": t.notes,
                 }
                 for p, t in shown
             ]
@@ -251,7 +316,7 @@ if st.button("Generate schedule"):
                         "time": f"{i.start_time:%H:%M}-{i.end_time:%H:%M}",
                         "pet": i.pet_name,
                         "task": i.task.title,
-                        "why": i.reason,
+                        "why": i.reason + (f" Notes: {i.task.notes}" if i.task.notes else ""),
                     }
                     for i in items
                 ]

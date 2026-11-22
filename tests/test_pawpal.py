@@ -1,6 +1,15 @@
 from datetime import date, time
 
+import pytest
+
+import pawpal_system
 from pawpal_system import Owner, Pet, Priority, Scheduler, Task
+
+
+@pytest.fixture(autouse=True)
+def _pin_clock(monkeypatch):
+    """Tasks default to starting today; pin it to the date these tests plan for."""
+    monkeypatch.setattr(pawpal_system, "_today", lambda: date(2026, 10, 20))
 
 
 def test_mark_complete_changes_task_status():

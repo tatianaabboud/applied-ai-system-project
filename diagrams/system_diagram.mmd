@@ -1,0 +1,61 @@
+flowchart TD
+    %% ---------- INPUT ----------
+    User([Pet owner])
+    UI["Streamlit UI (app.py)<br/>add pet / task, 'Suggest tasks' button"]
+    User -->|"pet name, species, age, breed,<br/>available minutes"| UI
+
+    %% ---------- AI PIPELINE (NEW) ----------
+    subgraph AI["AI suggestion pipeline (new module: ai_suggester.py)"]
+        direction TB
+        KB[("Pet-care knowledge base<br/>knowledge/*.md<br/>feeding, exercise, meds, vaccines")]
+        RET["Retriever<br/>keyword match on species / age / breed"]
+        LLM["LLM call (one per pet)<br/>retrieved passages + pet profile<br/>-> JSON list of suggested tasks"]
+        VAL{"Guardrail: validate JSON<br/>schema, ranges, allowed fields"}
+        FALL["Fallback: no suggestions<br/>(pet keeps manual tasks only)"]
+        KB --> RET --> LLM --> VAL
+        VAL -->|invalid / call failed| FALL
+    end
+
+    UI -->|pet profile| RET
+
+    %% ---------- HUMAN CHECK ----------
+    REVIEW["Human review<br/>owner sees each suggestion with its<br/>cited source and accepts / edits / rejects it"]
+    VAL -->|valid suggestions| REVIEW
+    REVIEW -->|accepted tasks| ADD
+
+    %% ---------- EXISTING CORE (pawpal_system.py) ----------
+    subgraph CORE["Existing scheduling core (pawpal_system.py)"]
+        direction TB
+        ADD["Pet.add_task()<br/>task notes cite the source"]
+        MODEL["Owner -> Pet -> Task<br/>(Priority, duration, frequency)"]
+        SCHED["Scheduler.generate_plan()<br/>sort, filter, fit into available minutes"]
+        CONF["Scheduler.find_conflicts()"]
+        ADD --> MODEL --> SCHED
+        SCHED --> CONF
+    end
+
+    UI -->|manual tasks| ADD
+
+    %% ---------- OUTPUT ----------
+    PLAN["Daily plan shown in UI<br/>scheduled items + reasons,<br/>skipped tasks, conflict warnings"]
+    SCHED --> PLAN
+    CONF --> PLAN
+    PLAN --> User
+
+    %% ---------- TESTING / RELIABILITY ----------
+    LOG[("Log file<br/>every AI call, sources used,<br/>validation result, errors")]
+    TESTS["Automated tests (pytest, tests/)<br/>- scheduler logic and conflicts<br/>- retriever picks correct docs<br/>- validator rejects bad JSON<br/>- LLM mocked: consistency check,<br/>  pass-rate score"]
+    RET -.-> LOG
+    LLM -.-> LOG
+    VAL -.-> LOG
+    TESTS -.->|verifies| RET
+    TESTS -.->|verifies| VAL
+    TESTS -.->|verifies| SCHED
+
+    %% ---------- STYLES ----------
+    classDef ai fill:#e8f0fe,stroke:#4a6fa5,color:#000
+    classDef human fill:#fff4d6,stroke:#c99a00,color:#000
+    classDef test fill:#e6f6e6,stroke:#3a8a3a,color:#000
+    class KB,RET,LLM,VAL,FALL ai
+    class REVIEW,User human
+    class TESTS,LOG test

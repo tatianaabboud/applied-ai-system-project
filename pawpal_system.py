@@ -14,6 +14,11 @@ MINUTES_PER_DAY = 24 * 60
 LAST_MINUTE = MINUTES_PER_DAY - 1  # plans must end by 23:59
 
 
+def _today() -> date:
+    """Return the current date; a seam so tests can pin the clock."""
+    return date.today()
+
+
 class Priority(IntEnum):
     """Higher value = more important, so tasks sort correctly with reverse=True."""
     LOW = 1
@@ -44,12 +49,13 @@ class Task:
     priority: Priority = Priority.MEDIUM
     preferred_time: Optional[time] = None
     frequency: str = "daily"  # "once" | "daily" | "weekly"
-    start_date: date = field(default_factory=date.today)  # first date this occurrence is due
+    start_date: date = field(default_factory=lambda: _today())  # first date this occurrence is due
     last_completed: Optional[date] = None
     earliest: Optional[time] = None  # may not start before this time
     latest: Optional[time] = None  # must be finished by this time
     after: Optional[str] = None  # id of a task that must finish before this one starts
     id: str = field(default_factory=lambda: uuid4().hex)
+    notes: str = ""  # free text, e.g. why an AI-suggested task exists and its source
 
     def __post_init__(self) -> None:
         """Reject non-positive durations, unknown frequencies and bad windows."""
@@ -88,6 +94,7 @@ class Pet:
     species: str
     age: int = 0
     tasks: list[Task] = field(default_factory=list)
+    breed: str = ""
 
     def add_task(self, task: Task) -> None:
         """Attach a care task to this pet."""
